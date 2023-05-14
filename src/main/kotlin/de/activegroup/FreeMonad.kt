@@ -14,7 +14,7 @@ object FreeMonad {
         companion object Key : CoroutineContext.Key<ContextElement<*>>
     }
 
-    fun <A, FA, DSL> effect(dsl: DSL,block: suspend DSL.() -> A, coroutineContext: CoroutineContext = EmptyCoroutineContext, ): FA {
+    fun <DSL, FA, A> effect(dsl: DSL,block: suspend DSL.() -> A, coroutineContext: CoroutineContext = EmptyCoroutineContext): FA {
         val element = ContextElement<FA>(null)
         suspend { dsl.block() }.startCoroutine(
             Continuation(coroutineContext + element) { result ->
@@ -28,7 +28,7 @@ object FreeMonad {
     }
 
     @Suppress("UNCHECKED_CAST")
-    suspend fun <A, FA> pure(result: A, pure: (A) -> FA): A =
+    suspend fun <FA, A> pure(result: A, pure: (A) -> FA): A =
         suspendCoroutine {
             val element = it.context[ContextElement]!! as ContextElement<FA>
             element.contents = pure(result)
@@ -36,7 +36,7 @@ object FreeMonad {
         }
 
     @Suppress("UNCHECKED_CAST")
-    suspend fun <A, FA> susp(bind: ((A) -> FA) -> FA): A =
+    suspend fun <FA, A> susp(bind: ((A) -> FA) -> FA): A =
         suspendCoroutine {
             val element = it.context[FreeMonad.ContextElement]!! as FreeMonad.ContextElement<FA>
             element.contents =
