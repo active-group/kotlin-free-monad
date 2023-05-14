@@ -1,8 +1,5 @@
 package de.activegroup
 
-import de.activegroup.Option.Companion.get
-import de.activegroup.Option.Companion.none
-import de.activegroup.Option.Companion.some
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.CoroutineContext
@@ -13,12 +10,12 @@ import kotlin.coroutines.suspendCoroutine
 
 object FreeMonad {
 
-    class ContextElement<FA>(var contents: Option<FA>) : AbstractCoroutineContextElement(ContextElement) {
+    class ContextElement<FA>(var contents: FA?) : AbstractCoroutineContextElement(ContextElement) {
         companion object Key : CoroutineContext.Key<ContextElement<*>>
     }
 
     fun <A, FA, DSL> effect(dsl: DSL,block: suspend DSL.() -> A, coroutineContext: CoroutineContext = EmptyCoroutineContext, ): FA {
-        val element = ContextElement<FA>(none())
+        val element = ContextElement<FA>(null)
         suspend { dsl.block() }.startCoroutine(
             Continuation(coroutineContext + element) { result ->
                 result.onFailure { exception ->
@@ -27,14 +24,14 @@ object FreeMonad {
                 }
             }
         )
-        return element.contents.get()
+        return element.contents!!
     }
 
     @Suppress("UNCHECKED_CAST")
     suspend fun <A, FA> pure(result: A, pure: (A) -> FA): A =
         suspendCoroutine {
             val element = it.context[ContextElement]!! as ContextElement<FA>
-            element.contents = some(pure(result))
+            element.contents = pure(result)
             it.resume(result)
         }
 
@@ -42,11 +39,10 @@ object FreeMonad {
     suspend fun <A, FA> susp(bind: ((A) -> FA) -> FA): A =
         suspendCoroutine {
             val element = it.context[FreeMonad.ContextElement]!! as FreeMonad.ContextElement<FA>
-            element.contents = some(
+            element.contents =
                 bind { result ->
                     it.resume(result)
-                    element.contents.get()
+                    element.contents!!
                 }
-            )
         }
 }
