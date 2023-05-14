@@ -38,7 +38,7 @@ object FreeMonad {
     @Suppress("UNCHECKED_CAST")
     suspend fun <FA, A> susp(bind: ((A) -> FA) -> FA): A =
         suspendCoroutine {
-            val element = it.context[FreeMonad.ContextElement]!! as FreeMonad.ContextElement<FA>
+            val element = it.context[ContextElement]!! as ContextElement<FA>
             element.contents =
                 bind { result ->
                     it.resume(result)
