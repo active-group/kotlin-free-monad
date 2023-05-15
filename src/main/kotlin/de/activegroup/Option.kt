@@ -2,7 +2,7 @@ package de.activegroup
 
 sealed interface Option<out A> {
     fun <B> bind(next: (A) -> Option<B>): Option<B>
-    suspend fun susp(): A = FreeMonad.susp<Option<A>, A>(this::bind)
+    suspend fun susp(): A = MonadDSL.susp<Option<A>, A>(this::bind)
 
     companion object {
         fun <A> some(value: A): Option<A> = Some(value)
@@ -13,6 +13,9 @@ sealed interface Option<out A> {
                 is None -> throw AssertionError("found None where Some was expected")
                 is Some -> value
             }
+
+        fun <A> optionally(block: suspend OptionDSL.() -> A): Option<A> =
+            MonadDSL.effect(OptionDSL(), block)
     }
 }
 
@@ -24,6 +27,5 @@ data class Some<out A>(val value: A) : Option<A> {
 }
 
 class OptionDSL() {
-    suspend fun  <A> pure(result: A) = FreeMonad.pure(result) { Some(it) }
-    fun <A> effect(block: suspend OptionDSL.() -> A): Option<A> = FreeMonad.effect(this, block)
+    suspend fun  <A> pure(result: A): A = MonadDSL.pure(result) { Some(it) }
 }

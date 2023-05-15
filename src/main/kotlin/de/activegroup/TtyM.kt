@@ -11,7 +11,7 @@ sealed interface TtyM<out A> {
     }
     fun <B> bind(next: (A) -> TtyM<B>): TtyM<B>
 
-    suspend fun susp(): A = FreeMonad.susp<TtyM<A>, A>(this::bind)
+    suspend fun susp(): A = MonadDSL.susp<TtyM<A>, A>(this::bind)
 
     companion object {
         tailrec suspend fun <A> run(tty: TtyM<A>): A =
@@ -37,6 +37,6 @@ sealed interface TtyM<out A> {
 
 class TtyDsl() {
     suspend fun write(text: String) = TtyM.Write(text) { TtyM.Pure(it) }.susp()
-    suspend fun  <A> pure(result: A) = FreeMonad.pure(result) { TtyM.Pure(it) }
-    fun <A> effect(block: suspend TtyDsl.() -> A): TtyM<A> = FreeMonad.effect(this, block)
+    suspend fun  <A> pure(result: A) = MonadDSL.pure(result) { TtyM.Pure(it) }
+    fun <A> effect(block: suspend TtyDsl.() -> A): TtyM<A> = MonadDSL.effect(this, block)
 }

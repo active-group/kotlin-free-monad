@@ -8,13 +8,13 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.startCoroutine
 import kotlin.coroutines.suspendCoroutine
 
-object FreeMonad {
+object MonadDSL {
 
     class ContextElement<FA>(var contents: FA?) : AbstractCoroutineContextElement(ContextElement) {
         companion object Key : CoroutineContext.Key<ContextElement<*>>
     }
 
-    fun <DSL, FA, A> effect(dsl: DSL,block: suspend DSL.() -> A, coroutineContext: CoroutineContext = EmptyCoroutineContext): FA {
+    fun <DSL, FA, A> effect(dsl: DSL, block: suspend DSL.() -> A, coroutineContext: CoroutineContext = EmptyCoroutineContext): FA {
         val element = ContextElement<FA>(null)
         suspend { dsl.block() }.startCoroutine(
             Continuation(coroutineContext + element) { result ->
