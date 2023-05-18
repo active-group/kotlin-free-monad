@@ -8,7 +8,7 @@ import kotlin.test.assertContentEquals
 class TtyMTest {
 
     @Test fun ttyMOutput() {
-        val tty = TtyDsl().effect {
+        val tty = TtyDsl.effect {
             write("foo")
             write("bar")
             pure(5)

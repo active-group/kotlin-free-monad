@@ -15,7 +15,7 @@ sealed interface Option<out A> {
             }
 
         fun <A> optionally(block: suspend OptionDSL.() -> A): Option<A> =
-            MonadDSL.effect(OptionDSL(), block)
+            MonadDSL.effect(OptionDSL, block)
     }
 }
 
@@ -26,6 +26,6 @@ data class Some<out A>(val value: A) : Option<A> {
     override fun <B> bind(next: (A) -> Option<B>): Option<B> = next(this.value)
 }
 
-class OptionDSL() {
+object OptionDSL {
     suspend fun  <A> pure(result: A): A = MonadDSL.pure(result) { Some(it) }
 }
