@@ -1,0 +1,365 @@
+#+TITLE: Monaden in Kotlin
+#+SUBTITLE: Funktionale Programmierung für bessere Architektur
+#+AUTHOR: Michael Sperber, Benedikt Stemmildt
+#+DATE: 19. Mai 2023
+
+Monaden sind in der funktionalen Programmierung so eine Art
+Allzweckwafffe für alle möglichen Probleme, die scheinbar nichts
+miteinander zu tun haben: asynchrone Programmierung, Nebenläufigkeit,
+Parallelität, Exceptions, Modellierung von Prozessen, Dependency
+Injection und architektonische Kopplung.  In funktionalen Sprachen wie
+Haskell, Scala oder F# sind Monaden fester Bestandteil der
+Programmiersprache mit eigener Syntax, und deshalb dort Alltag in der
+Programmierung.  In Java fristen Monaden ein Schattendasein, weil
+diese Unterstützung fehlt.  In Kotlin sieht das anders aus: Monaden
+werden erstklassig unterstützt.  Dieser Artikel zeigt, wie und
+beispielhaft, wofür man sie nutzen kann - für Dependency Injection und
+die Modellierung von Abläufen, beides wichtiger Aspekte moderner
+Architektur.  Die Schlüsselrolle kommt dabei =suspend=-Funktionen zu.
+
+* Kontext - implizit, aber richtig
+
+In einem Softwareprojekt ist es sinnvoll, Domänenlogik von technischen
+Aspekten zu trennen und diese technischen Aspekte möglichst nicht zu
+fest zu verdrahten, damit sie austauschbar sind.  Ein Problem ist
+dabei der Zugriff auf /Kontext/ also die Außenwelt des Projekts.  Der
+Artikel "Dependency Injection mit funktionaler Programmierung" im
+JavaSPEKTRUM 01/2022 zeigt, wie man in Java dafür Monaden verwenden
+kann.  Allerdings zeigt der Artikel auch eindrücklich, warum Monaden
+in Java nicht besonders populär sind - ein monadisches Programm
+benötigt viele Klammern, das Beispiel aus dem Artikel sieht so aus:
+
+#+begin_src java
+public JdbcComputation<Void> computation() {
+    return
+      Jdbc.execute("DROP TABLE customers IF EXISTS").andThen(
+      ...
+      }));}));
+}
+#+end_src
+
+In Kotlin geht das glücklicherweise besser.  Doch zunächst noch einmal
+zur Problemstellung: Wenn eine Funktion auf eine Datenbank zugreifen
+will, benötigt sie ein Objekt, das die Verbindung zu der Datenbank
+hält - in Spring vom Typ =JdbcTemplate=.  In typischen
+Dependency-Injection-Frameworks deklariert das Programm mit einer
+Annotation wie =@Autowired= (Spring), dass sich das Framework um die
+Bereitstellung des Objekts kümmern möge.  Dadurch entstehen aber
+Kopplung ans Framework und temporale Kopplung and die
+Initialisierungsreihenfolge.  (Details finden sich im Artikel in
+JavaSPEKTRUM 01/2022, dessen Lektüre aber nicht Voraussetzung für
+diesen Artikel ist.)
+
+Zunächst steht die Lösung des Problems mit der temporalen Kopplung an.
+Dazu könnte das Programm das =JdbcTemplate=-Objekt als Argument an
+alle Funktionen übergeben, welche auf die Datenbank zugreifen.  Also so
+etwa - ab jetzt in Kotlin:
+
+#+begin_src kotlin
+fun storeUser(User user, JdbcTemplate jdcb) { ... }
+#+end_src
+
+Falls =storeUser= noch Unterfunktionen hat, muss sie das
+=jdbc=-Argument an diese weitergeben.  Auf die Art und Weise wird
+sichergestellt, dass diese Funktion nur aufgerufen werden kann, wenn
+ein =JdbcTemplate=-Objekt erstellt und (hoffentlich) dabei
+initialisiert wurde.  Die Abhängigkeit von diesem Objekt gegenüber der
+impliziten =@Autowired=-Lösung explizit geworden - das ist in der
+Softwarearchitektur oft der erste Schritt zur Besserung.
+
+Allerdings ist es natürlich umständlich, jede einzelne Funktion mit
+so einem Parameter zu versehen und den durch jede Unterfunktion
+durchzufädeln.  Außerdem ist die Abhängigkeit zu Spring durch den
+=JdbcTemplate=-Typ nach wie vor vorhanden.  Beide Probleme wollen wir
+lösen.
+
+Um das Ergebnis gleich vorwegzunehmen - das Programm aus dem
+Spring-Tutorial soll am Ende so aussehen:
+
+#+begin_src kotlin
+jdbc {
+  execute("DROP TABLE customers IF EXISTS")
+  execute(
+      "CREATE TABLE customers(" +
+	      "id SERIAL, first_name VARCHAR(255), last_name VARCHAR(255))"
+  )
+  val splitUpNames = listOf("John Woo", "Jeff Dean", "Josh Bloch", "Josh Long").stream()
+      .map { name -> name.split(" ") }
+      .collect(Collectors.toList())
+      .map { it.toTypedArray<Any>() }
+  batchUpdate("INSERT INTO customers(first_name, last_name) VALUES (?,?)", splitUpNames.toList())
+  val customers = query(
+	  "SELECT id, first_name, last_name FROM customers WHERE first_name = ?",
+	  arrayOf("Josh"))
+      { rs, rowNum -> Customer(rs.getLong("id"), rs.getString("first_name"), rs.getString("last_name")) }
+  customers.forEach { customer -> log.info(customer.toString()) }
+  pure(Unit)
+}
+#+end_src
+
+Sichtlich also keine exzessiven Klammern mehr, außerdem keine
+Erwähnung von =JdbcTemplate= mehr.  Wichtig ist das =jdbc { ... }= um
+das Programm herum, das die Funktionen =execute=, =batchUpdate= und
+=query= verfügbar macht, sowie die Funktion =pure=, die ähnlich zu
+=return= den finalen Rückgabewert des Programms bestimmt.
+
+Damit das alles funktioniert, müssen zwei Elemente von Kotlin
+ineinandergreifen:
+
+1. sogenannte =suspend=-Funktionen, um eine /Reader-Monade/ zu
+   realisieren, die Zugriff auf =JdbcTemplate= ermöglicht
+2. die sogenannten /function literals with receiver/, die es erlauben,
+   in die geschweiften Klammern die SQL-Funktionen zu importieren.
+   
+* Eine Reader-Monade in Kotlin
+
+Das Programm oben benutzt die Funktion =execute=.  Sie ist
+folgendermaßen definiert:
+
+#+begin_src kotlin
+suspend fun execute(sql: String): Unit =
+  ask().execute(sql)
+#+end_src
+
+Die Funktion =ask()= liefert das =JdbcTemplate=-Objekt ab, das für die
+Ausführung der SQL-Operation benötigt wird.  Wo kommt es her?  Es soll
+aus dem "Kontext" kommen, aber nicht aus einem
+Dependency-Injection-Mechanismus mit den oben beschriebenen
+Problemen.
+
+Das Programm oben benutzt für den Zugriff auf den Wert aus dem Kontext
+eine sogenannte /Reader-Monade/.  In einer Reader-Monade wird ein
+Programm, das auf den Kontext zugreifen möchte, als Objekt
+des Typs =Reader<R, A>= dargestellt.  Das Programm liefert ein
+Ergebnis vom Typ =A= und kann auf ein Objekt aus dem Kontext des Typs
+=R= zugreifen.  Hier ist die Definition von =Reader=:
+
+#+begin_src kotlin
+sealed interface Reader<R, out A> {
+  fun <B> bind(next: (A) -> Reader<R, B>): Reader<R, B>
+  data class Ask<R, out A>(val cont: (R) -> Reader<R, A>): Reader<R, A> {
+    override fun <B> bind(next: (A) -> Reader<R, B>): Reader<R, B> =
+	Ask { r -> cont(r).bind(next) }
+  }
+  data class Pure<R, out A>(val result : A): Reader<R, A> {
+    override fun <B> bind(next: (A) -> Reader<R, B>): Reader<R, B> =
+	next(result)
+  }
+}
+#+end_src
+
+Den Kontext-Zugriff erledigt die Klasse =Ask=, die als Attribut eine
+sogenannte /Continuation/ bekommt, effektiv ein Callback, der
+aufgerufen wird mit dem Kontext-Objekt und das Programm zurückliefert,
+mit dem es weitergeht.  Die =Pure=-Klasse ist dafür zuständig, ein
+Programm mit einem Ergebnis zu beenden.  Da mit ist es schon einmal
+möglich, ein Reader-Programm so zu formulieren:
+
+#+begin_src kotlin
+val readerProgram = Ask<Int, String> { r ->
+    Pure((r + 1).toString())
+  }
+#+end_src
+
+Das entspricht etwa dem, was in Java möglich ist und ist noch ziemlich
+umständlich - muss also noch besser werden.
+
+Zunächst noch kurz zur =bind=-Methode(in den Java-Klassen =Stream= und
+=Optional= auch unter dem Namen =flatMap= bekannt): Sie ist die
+Standard-Operation der Monade, um zwei Reader-Programme
+hintereinanderzuschalten.
+
+So ein Objekt vom Typ =Reader<R, A>= ist aber nur eine Beschreibung
+eines Programms, das auf den Kontext zugreift: Damit es läuft, muss es
+explizit ausgeführt werden - und dabei geschieht auch die eigentliche
+Dependency Injection, die festlegt, welches Objekt aus =Ask=
+zurückgegeben wird.  Dies erledigt die folgende einfache Funktion
+=run=, die für jede =Ask=-Operation deren Continuation mit dem Objekt
+=r= aufruft, das an =run= übergeben wird::
+
+#+begin_src kotlin
+tailrec fun <R, A> run(reader: Reader<R, A>, r: R): A =
+  when (reader) {
+      is Ask -> run(reader.cont(r), r)
+      is Pure -> reader.result
+  }
+#+end_src
+
+Zum Beispiel liefert =run(readerProgram, 7)= den Text ="8"=.
+
+Die Dependency Injection passiert also beim Aufruf von =run= explizit,
+was die implizite temporale Kopplung vermeidet, die das Programm aus
+dem Spring-Tutorial hatte.  Das ist architektonisch gut, aber
+notationell noch schlecht.
+
+* Eine DSL für Reader-Programme
+
+Das winzige Beispiel von oben soll besser so aussehen:
+
+#+begin_src kotlin
+val readerProgram = reader<Int, String> {
+  val r = ask()
+  pure((r + 1).toString())
+}
+#+end_src
+
+Mit anderen Worten: Wie ein ganz normales Kotlin-Programm, nur eben
+mit =reader<..., ...> { ... }= drumherum.  Trotzdem soll es ein
+=Reader=-Objekt erzeugen.  Wie ist das möglich?  Hier ist die
+Definition von =Reader= und der Klasse =ReaderDsl=, welche =ask=
+und =pure= bereitstellt:
+
+#+begin_src kotlin
+fun <R, A> reader(block: suspend ReaderDsl<R>.() -> A): Reader<R, A> =
+    MonadDSL.effect(ReaderDsl(), block)
+
+open class ReaderDsl<R> {
+  suspend fun ask(): R =
+      Reader.Ask<R, R> { Reader.Pure(it) }.susp()
+  suspend fun <A> pure(result: A): A =
+      MonadDSL.pure<Reader<R, A>, A>(result) { Reader.Pure(it)  }
+}
+#+end_src
+
+Diese Funktionen bedienen sich der =MonadDSL=-Klasse, die bei der
+Definition solcher monadischen DSLs hilft - dazu gleich mehr.
+Außerdem ist noch eine Methode =susp= notwendig, mit dieser
+Definition:
+
+#+begin_src kotlin
+sealed interface Reader<R, out A> {
+  ...
+  suspend fun susp(): A = MonadDSL.susp<Reader<R, A>, A>(this::bind)
+  ...
+}
+#+end_src
+
+Auf Grundlage der =ReaderDsl=-Klasse kann nun eine DSL-Klasse für
+Datenbankprogramme gebaut werden, mit der das Spring-Tutorial-Programm
+funktioniert.  Die SQL-Funktionen rufen allesamt =ask()= auf, um an
+das =JdbcTemplate=-Objekt zu kommen:
+
+#+begin_src kotlin
+typealias JdbcComputation<A> = Reader<JdbcTemplate, A>
+
+class JdbcDsl : ReaderDsl<JdbcTemplate>()  {
+  suspend fun execute(sql: String): Unit =
+    ask().execute(sql)
+  suspend fun batchUpdate(sql: String, batchArgs: List<Array<Any>>)
+    : Array<Int> = ask().batchUpdate(sql, batchArgs)
+  suspend fun <T> query(sql: String, args: Array<Any>, rowMapper: (Row, Int) -> T)
+    : List<T> = ask().query(sql, args, rowMapper)
+}
+
+val Jdbc = JdbcDsl()
+
+fun  <A> jdbc(block: suspend JdbcDsl.() -> A): JdbcComputation<A> =
+    Reader.reader { Jdbc.block() }
+#+end_src
+
+* Coroutinen, Continuations und Monaden
+
+Der Source-Code für =MonadDSL= kann im Repositorium eingesehen werden,
+das im Anhang verlinkt werden.  Ihre genaue Definition würde den
+Rahmen dieses Artikels sprengen.  Dieser Abschnitt erläutert die
+grundsätzliche Funktionsweise für Interessierte.
+
+Der Schlüssel ist das Wort =suspend= an den Funktionen in =JdbcDsl=.
+Es verwandelt eine Funktion in eine sogenannte /Coroutine/ und
+versetzt den Compiler in einen anderen Modus, der auf der Funktion
+daraufhin eine sogenannte /CPS-Transformation/ durchführt.
+
+"CPS" steht für /Continuation-Passing Style/ und ist eine bestimmte
+Art, Funktionen zu schreiben.  Normalerweise sind Programme
+"verschachtelt", indem das Ergebnis eines Funktionsaufrufs
+zurückgegeben wird.
+
+#+begin_src kotlin
+f(g(h(x)))
+#+end_src
+
+Bei CPS geht es niemals zurück: Wenn eine Funktion fertig ist, gibt
+sie kein Ergebnis "zurück", sondern ruft stattdessen eine Funktion
+auf, die weitermacht – eben die Continuation, englisch für
+"Fortsetzung".  In CPS sieht der obige geschachtelte Funktionsaufruf
+so aus:
+
+#+begin_src kotlin
+h(x) { g(it) { gr -> f(it) { ... } } }
+#+end_src
+
+Das Programm wird also linearisiert – die Funktionsaufrufe stehen in
+der Reihenfolge, in der sie auch zur Laufzeit passieren.  Außerdem
+bekommt jedes Zwischenergebnis einen Namen und jede Continuation ist
+ein /Objekt/, das gespeichert und benutzt werden kann, um eine
+Berechnung zu reaktivieren.
+
+Kotlin bietet für =suspend=-Funktionen eine Methode
+=suspendCoroutine=, die es erlaubt, ein Programm bis zur nächsten
+Continuation laufen zu lassen und dann anzuhalten.  =MonadDSL= benutzt
+=suspendCoroutine=, um bei jeder Continuation einen Aufruf von =bind=
+einzuschmuggeln und so aus einer "ganz normalen" =suspend=-Funktion
+ein monadisches Programm zu machen.
+
+* Noch weniger Kopplung
+
+Die =JdbcDsl=-Monade hat noch ein Problem: Zwar enthält das
+Spring-Beispiel keine explizite Erwähnung mehr von =JdbcTemplate=,
+aber =JdbcDsl= ist eine Unterklasse von =ReaderDsl<JdbcTemplate>=.  Es
+gibt also immer noch unerwünschte Kopplung ans Framework.
+
+In realen Projekten sollte man sich für die Beschreibung von Abläufen
+deshalb auch nicht an "Technik" orientieren wie der Reader-Monade oder
+JDBC, sondern an den Operationen der Domäne.  Hier ist zum Beispiel
+eine "Shopping"-Monade eines fiktiven eCommerce-Projekts mit
+Operationen zum Abholen eines Artikels und eines Kunden-Datensatzes
+aus der externen Datenbank:
+
+#+begin_src kotlin
+sealed interface Shopping<out A> {
+    fun <B> bind(next: (A) -> Shopping<B>): Shopping<B>
+    data class GetArticle<out A>(val id: Int, val cont: (Article) -> Shopping<A>): Shopping<A> {
+        override fun <B> bind(next: (A) -> Shopping<B>): Shopping<B> =
+            GetArticle(id) { article -> cont(article).bind(next) }
+    }
+    data class GetCustomer<out A>(val id: Int, val cont: (Customer) -> Shopping<A>): Shopping<A> {
+        override fun <B> bind(next: (A) -> Shopping<B>): Shopping<B> =
+            GetCustomer(id) { customer -> cont(customer).bind(next) }
+    }
+    data class Pure<out A>(val result: A): Shopping<A> {
+        override fun <B> bind(next: (A) -> Shopping<B>): Shopping<B> = next(result)
+    }
+}
+#+end_src
+
+Diese Monade kommt ganz ohne "Technik" aus und kann in Domänencode
+verwendet werden.
+
+FIXME: Fork/Join für Nebenläufigkeit
+
+* Fazit
+
+Monaden erlauben die Definition von Abläufen in reiner Domänenlogik,
+ohne Bezug zur Technik darunter und dienen damit der architektonischen
+Entkopplung.  Sie vermeiden die Probleme typischer
+Dependency-Injection-Frameworks, die zu Kopplung an Framework und
+Abfolge neigen.
+
+* Referenzen
+
+Repositorium mit =MonadDSL= und den Code-Beispielen dieses Artikels:
+
+https://github.com/active-group/kotlin-free-monad
+
+* Michael Sperber
+
+Dr. Michael Sperber ist Geschäftsführer der Active Group GmbH.  Er ist
+international anerkannter Experte für funktionale Programmierung und
+wendet sie seit über 20 Jahren in Forschung, Lehre und industrieller
+Entwicklung an.
+
+* Benedikt Stemmildt
+
+Benedikt Stemmildt ist CTO bei TalentFormation, dessen Company
+Rebuilding Ansatz voranzutreiben.  Er ist seit vielen Jahren als
+Software-Architekt und CIO in eCommerce-Projekten unterwegs.
