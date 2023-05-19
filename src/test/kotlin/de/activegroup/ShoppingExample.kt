@@ -43,37 +43,37 @@ class ShoppingDsl {
         Shopping.GetCustomer(id) { Shopping.Pure(it) }.susp()
     suspend fun <R> fork(computation: Shopping<R>): Future<R> =
         Shopping.Fork(computation) { Shopping.Pure(it)}.susp()
+    @Suppress("UNCHECKED_CAST")
     suspend fun <R> join(future: Future<R>): R =
         Shopping.Join(future) { Shopping.Pure(it as R)}.susp()
     suspend fun <A> pure(result: A): A =
         MonadDSL.pure<Shopping<A>, A>(result) { Shopping.Pure(it) }
 }
 
-data class Future<out A>(val thunk: () -> Any) {
-    fun force() = thunk() as A
-}
+data class Future<out A>(val thunk: () -> Any)
 
 val example =
     Shopping.Fork(Shopping.GetCustomer(1) { Shopping.Pure(it) }) { c1p ->
         Shopping.Fork(Shopping.GetArticle(1) { Shopping.Pure(it) }) { a1p ->
             Shopping.Join(c1p) { c1 -> Shopping.Join(a1p) { a1 -> Shopping.Pure((c1 as Customer).firstName + (a1 as Article).name) }}}}
 
+@Suppress("NON_TAIL_RECURSIVE_CALL")
 tailrec fun <A> shop(comp: Shopping<A>): A =
     when (comp) {
         is Shopping.GetArticle -> shop(comp.cont(Article(comp.id, "article")))
         is Shopping.Fork<*, A> ->
-            shop(comp.cont(Future({ shop(comp.computation)!! })))
+            shop(comp.cont(Future { shop(comp.computation)!! }))
         is Shopping.GetCustomer -> shop(comp.cont(Customer(comp.id.toLong(), "first", "last")))
         is Shopping.Join<*, A> -> shop(comp.cont(comp.future.thunk()))
         is Shopping.Pure -> comp.result
     }
 
 val exampleDsl = shopping {
-    val c1p = fork(shopping { pure(getCustomer(1)) } )
-    val a1p = fork(shopping { pure(getArticle(1)) } )
-    val c1 = join(c1p)
-    val a1 = join(a1p)
-    pure(c1.firstName + a1.name)
+    val customerF = fork(shopping { pure(getCustomer(1)) } )
+    val articleF = fork(shopping { pure(getArticle(1)) } )
+    val customer = join(customerF)
+    val article = join(articleF)
+    pure(customer.firstName + article.name)
 }
 
 
