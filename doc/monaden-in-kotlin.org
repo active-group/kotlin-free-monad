@@ -317,25 +317,87 @@ aus der externen Datenbank:
 
 #+begin_src kotlin
 sealed interface Shopping<out A> {
-    fun <B> bind(next: (A) -> Shopping<B>): Shopping<B>
-    data class GetArticle<out A>(val id: Int, val cont: (Article) -> Shopping<A>): Shopping<A> {
-        override fun <B> bind(next: (A) -> Shopping<B>): Shopping<B> =
-            GetArticle(id) { article -> cont(article).bind(next) }
-    }
-    data class GetCustomer<out A>(val id: Int, val cont: (Customer) -> Shopping<A>): Shopping<A> {
-        override fun <B> bind(next: (A) -> Shopping<B>): Shopping<B> =
-            GetCustomer(id) { customer -> cont(customer).bind(next) }
-    }
-    data class Pure<out A>(val result: A): Shopping<A> {
-        override fun <B> bind(next: (A) -> Shopping<B>): Shopping<B> = next(result)
-    }
+  fun <B> bind(next: (A) -> Shopping<B>): Shopping<B>
+  data class GetArticle<out A>(val id: Int, val cont: (Article) -> Shopping<A>)
+      : Shopping<A> {
+    override fun <B> bind(next: (A) -> Shopping<B>): Shopping<B> =
+      GetArticle(id) { article -> cont(article).bind(next) }
+  }
+  data class GetCustomer<out A>(val id: Int, val cont: (Customer) -> Shopping<A>)
+      : Shopping<A> {
+    override fun <B> bind(next: (A) -> Shopping<B>): Shopping<B> =
+      GetCustomer(id) { customer -> cont(customer).bind(next) }
+  }
+  data class Pure<out A>(val result: A): Shopping<A> {
+    override fun <B> bind(next: (A) -> Shopping<B>): Shopping<B> = next(result)
+  }
 }
 #+end_src
 
 Diese Monade kommt ganz ohne "Technik" aus und kann in Domänencode
-verwendet werden.
+verwendet werden.  Die DSL dafür wird genauso gebaut, wie auch bei der
+Reader-Monade.  Damit können sequenzielle Abläufe abgebildet werden,
+die mit Artikeln und Kunden zusammenhängen.  Häufig enthalten aber
+solche Abläufe auch Nebenläufigkeit.  Ein nebenläufiger Prozess
+wird abgebildet durch eine Klasse =Future<A>=, wobei =A= das Ergebnis
+des Prozesses ist, wenn er fertig ist.  Das einzige Attribut
+von =Future= ist eine Funktion, die dieses Ergebnis liefert:
 
-FIXME: Fork/Join für Nebenläufigkeit
+#+begin_src kotlin
+data class Future<out A>(val thunk: () -> Any)
+#+end_src
+
+(Das =Any= ist leider notwendig, weil das Kotlin-Typsystem den
+Zusammenhang zwischen der Monade und =Future= nicht typischer abbilden
+kann.)  =Future= wird von zwei neuen Operationen in der
+=Shopping=-Monade benutzt: =Fork=, um einen nebenläufigen Prozess zu
+starten und =Join=, um dessen Ergebnis (später) abzurufen:
+
+#+begin_src kotlin
+sealed interface Shopping<out A> {
+  data class Fork<R, out A>(val computation: Shopping<R>,
+			    val cont: (Future<R>) -> Shopping<A>)
+      : Shopping<A> {
+    override fun <B> bind(next: (A) -> Shopping<B>): Shopping<B> =
+      Fork(computation) { forked -> cont(forked).bind(next) }
+  }
+  data class Join<R, out A>(val future: Future<R>, val cont: (Any) -> Shopping<A>)
+      : Shopping<A> {
+    override fun <B> bind(next: (A) -> Shopping<B>): Shopping<B> =
+      Join(future) { result -> cont(result).bind(next) }
+  }
+}
+#+end_src
+
+Mit den entsprechenden Operationen in der DSL dazu sieht so ein
+Beispielprogramm aus:
+
+#+begin_src kotlin
+shopping {
+  val customerF = fork(shopping { pure(getCustomer(1)) } )
+  val articleF = fork(shopping { pure(getArticle(1)) } )
+  val customer = join(customerF)
+  val article = join(articleF)
+  pure(customer.firstName + article.name)
+}
+#+end_src
+
+Die beiden Aufrufe von =fork= drücken aus, dass =getCustomer= und
+=getArticle= beide nebenläufig im Hintergrund ablaufen können,
+insbesondere also gleichzeitig.  Dies könnte sinnvoll sein, wenn beide
+Datensätze aus unterschiedlichen Datenbanken kommen.  Genauso sinnvoll
+könnte aber auch sein, beide Aufrufe erst aufzusammeln und dann
+gemeinsam an dieselbe Datenbank schicken zu lassen.  Die Monade lässt
+Raum für beides.  Erst die =join=-Aufrufe warten dann auf das Ergebnis
+des jeweiligen Prozesses.
+
+Die Funktion, die dann einen =Shopping=-Ablauf ausführt, hat also
+große Freiheiten nicht nur bei der Implementierung der
+Domänenoperationen sondern auch bei der Implementierung der
+Nebenläufigkeit beziehungsweise der Auswahl des geeigneten Frameworks
+dafür.  Nachträglich so etwas wie Profiling oder Logging zu
+implementieren, kann ebenfalls in dieser Funktion stattfinden.  Domäne
+und Technik sind also wahrhaft voneinander entkoppelt.
 
 * Fazit
 
@@ -343,7 +405,14 @@ Monaden erlauben die Definition von Abläufen in reiner Domänenlogik,
 ohne Bezug zur Technik darunter und dienen damit der architektonischen
 Entkopplung.  Sie vermeiden die Probleme typischer
 Dependency-Injection-Frameworks, die zu Kopplung an Framework und
-Abfolge neigen.
+Abfolge neigen.  Monaden können noch viel mehr - zum Beispiel
+Domänenmodellierung, Exceptions, probabilistische Programmierung.
+Damit ihre Benutzung aber praktikabel wird, ist Unterstützung von der
+Programmiersprache erforderlich.  Echte funktionale Sprachen wie Scala
+oder Haskell bieten da viel Komfort durch spezielle Syntax und
+mächtige Überladungsmechanismen.  In Kotlin macht es die Kombination
+aus DSL-Funktionalität und =suspend=-Funktionen zusammen mit der daran
+hängenden CPS-Transformation.  Viel Spaß beim Ausprobieren!
 
 * Referenzen
 
