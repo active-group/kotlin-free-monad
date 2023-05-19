@@ -7,10 +7,10 @@ Monaden sind in der funktionalen Programmierung so eine Art
 Allzweckwafffe für alle möglichen Probleme, die scheinbar nichts
 miteinander zu tun haben: asynchrone Programmierung, Nebenläufigkeit,
 Parallelität, Exceptions, Modellierung von Prozessen, Dependency
-Injection und architektonische Kopplung.  In funktionalen Sprachen wie
+Injection und architektonische Entkopplung.  In funktionalen Sprachen wie
 Haskell, Scala oder F# sind Monaden fester Bestandteil der
 Programmiersprache mit eigener Syntax, und deshalb dort Alltag in der
-Programmierung.  In Java fristen Monaden ein Schattendasein, weil
+Programmierung.  In Java fristen sie ein Schattendasein, weil
 diese Unterstützung fehlt.  In Kotlin sieht das anders aus: Monaden
 werden erstklassig unterstützt.  Dieser Artikel zeigt, wie und
 beispielhaft, wofür man sie nutzen kann - für Dependency Injection und
@@ -44,8 +44,8 @@ will, benötigt sie ein Objekt, das die Verbindung zu der Datenbank
 hält - in Spring vom Typ =JdbcTemplate=.  In typischen
 Dependency-Injection-Frameworks deklariert das Programm mit einer
 Annotation wie =@Autowired= (Spring), dass sich das Framework um die
-Bereitstellung des Objekts kümmern möge.  Dadurch entstehen aber
-Kopplung ans Framework und temporale Kopplung and die
+Bereitstellung des Objekts kümmern möge.  Dadurch entsteht aber
+Kopplung ans Framework und temporale Kopplung an die
 Initialisierungsreihenfolge.  (Details finden sich im Artikel in
 JavaSPEKTRUM 01/2022, dessen Lektüre aber nicht Voraussetzung für
 diesen Artikel ist.)
@@ -80,24 +80,27 @@ Spring-Tutorial soll am Ende so aussehen:
 jdbc {
   execute("DROP TABLE customers IF EXISTS")
   execute(
-      "CREATE TABLE customers(" +
-	      "id SERIAL, first_name VARCHAR(255), last_name VARCHAR(255))"
+    "CREATE TABLE customers(" +
+      "id SERIAL, first_name VARCHAR(255), last_name VARCHAR(255))"
   )
   val splitUpNames = listOf("John Woo", "Jeff Dean", "Josh Bloch", "Josh Long").stream()
       .map { name -> name.split(" ") }
       .collect(Collectors.toList())
       .map { it.toTypedArray<Any>() }
-  batchUpdate("INSERT INTO customers(first_name, last_name) VALUES (?,?)", splitUpNames.toList())
+  batchUpdate("INSERT INTO customers(first_name, last_name) VALUES (?,?)",
+	      splitUpNames.toList())
   val customers = query(
-	  "SELECT id, first_name, last_name FROM customers WHERE first_name = ?",
-	  arrayOf("Josh"))
-      { rs, rowNum -> Customer(rs.getLong("id"), rs.getString("first_name"), rs.getString("last_name")) }
+          "SELECT id, first_name, last_name FROM customers WHERE first_name = ?",
+          arrayOf("Josh"))
+      { rs, rowNum -> Customer(rs.getLong("id"),
+			       rs.getString("first_name"),
+			       rs.getString("last_name")) }
   customers.forEach { customer -> log.info(customer.toString()) }
   pure(Unit)
 }
 #+end_src
 
-Sichtlich also keine exzessiven Klammern mehr, außerdem keine
+Keine exzessiven Klammern, außerdem keine
 Erwähnung von =JdbcTemplate= mehr.  Wichtig ist das =jdbc { ... }= um
 das Programm herum, das die Funktionen =execute=, =batchUpdate= und
 =query= verfügbar macht, sowie die Funktion =pure=, die ähnlich zu
@@ -139,20 +142,21 @@ sealed interface Reader<R, out A> {
   fun <B> bind(next: (A) -> Reader<R, B>): Reader<R, B>
   data class Ask<R, out A>(val cont: (R) -> Reader<R, A>): Reader<R, A> {
     override fun <B> bind(next: (A) -> Reader<R, B>): Reader<R, B> =
-	Ask { r -> cont(r).bind(next) }
+        Ask { r -> cont(r).bind(next) }
   }
   data class Pure<R, out A>(val result : A): Reader<R, A> {
     override fun <B> bind(next: (A) -> Reader<R, B>): Reader<R, B> =
-	next(result)
+        next(result)
   }
 }
 #+end_src
 
 Den Kontext-Zugriff erledigt die Klasse =Ask=, die als Attribut eine
 sogenannte /Continuation/ bekommt, effektiv ein Callback, der
-aufgerufen wird mit dem Kontext-Objekt und das Programm zurückliefert,
+aufgerufen wird mit dem Kontext-Objekt.  Die Continuation liefert das
+Programm zurück,
 mit dem es weitergeht.  Die =Pure=-Klasse ist dafür zuständig, ein
-Programm mit einem Ergebnis zu beenden.  Da mit ist es schon einmal
+Programm mit einem Ergebnis zu beenden.  Damit ist es schon einmal
 möglich, ein Reader-Programm so zu formulieren:
 
 #+begin_src kotlin
@@ -164,7 +168,7 @@ val readerProgram = Ask<Int, String> { r ->
 Das entspricht etwa dem, was in Java möglich ist und ist noch ziemlich
 umständlich - muss also noch besser werden.
 
-Zunächst noch kurz zur =bind=-Methode(in den Java-Klassen =Stream= und
+Zunächst noch kurz zur =bind=-Methode (in den Java-Klassen =Stream= und
 =Optional= auch unter dem Namen =flatMap= bekannt): Sie ist die
 Standard-Operation der Monade, um zwei Reader-Programme
 hintereinanderzuschalten.
@@ -172,7 +176,7 @@ hintereinanderzuschalten.
 So ein Objekt vom Typ =Reader<R, A>= ist aber nur eine Beschreibung
 eines Programms, das auf den Kontext zugreift.  =Reader= ist eine sogenannte
 /freie Monade/ und repräsentiert eine fundamental objektorientierte
-Idee - alles, also auch Abläufe wird durch Objekte repräsentiert.
+Idee - alles, also auch Abläufe, wird durch Objekte repräsentiert.
 Damit so ein =Reader=-Programm läuft, muss es
 explizit ausgeführt werden - und dabei geschieht auch die eigentliche
 Dependency Injection, die festlegt, welches Objekt aus =Ask=
@@ -282,8 +286,8 @@ f(g(h(x)))
 #+end_src
 
 Bei CPS geht es niemals zurück: Wenn eine Funktion fertig ist, gibt
-sie kein Ergebnis "zurück", sondern ruft stattdessen eine Funktion
-auf, die weitermacht – eben die Continuation, englisch für
+sie kein Ergebnis "zurück", sondern ruft stattdessen eine an sie
+übergebene Funktion auf, die weitermacht – eben die Continuation, englisch für
 "Fortsetzung".  In CPS sieht der obige geschachtelte Funktionsaufruf
 so aus:
 
@@ -351,7 +355,7 @@ data class Future<out A>(val thunk: () -> Any)
 #+end_src
 
 (Das =Any= ist leider notwendig, weil das Kotlin-Typsystem den
-Zusammenhang zwischen der Monade und =Future= nicht typischer abbilden
+Zusammenhang zwischen der Monade und =Future= nicht typsicher abbilden
 kann.)  =Future= wird von zwei neuen Operationen in der
 =Shopping=-Monade benutzt: =Fork=, um einen nebenläufigen Prozess zu
 starten und =Join=, um dessen Ergebnis (später) abzurufen:
@@ -359,7 +363,7 @@ starten und =Join=, um dessen Ergebnis (später) abzurufen:
 #+begin_src kotlin
 sealed interface Shopping<out A> {
   data class Fork<R, out A>(val computation: Shopping<R>,
-			    val cont: (Future<R>) -> Shopping<A>)
+                            val cont: (Future<R>) -> Shopping<A>)
       : Shopping<A> {
     override fun <B> bind(next: (A) -> Shopping<B>): Shopping<B> =
       Fork(computation) { forked -> cont(forked).bind(next) }
@@ -409,7 +413,7 @@ ohne Bezug zur Technik darunter und dienen damit der architektonischen
 Entkopplung.  Sie vermeiden die Probleme typischer
 Dependency-Injection-Frameworks, die zu Kopplung an Framework und
 Abfolge neigen.  Monaden können noch viel mehr - zum Beispiel
-Domänenmodellierung, Exceptions, probabilistische Programmierung.
+Domänenmodellierung, Exceptions oder probabilistische Programmierung.
 Damit ihre Benutzung aber praktikabel wird, ist Unterstützung von der
 Programmiersprache erforderlich.  Echte funktionale Sprachen wie Scala
 oder Haskell bieten da viel Komfort durch spezielle Syntax und
