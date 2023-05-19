@@ -1,7 +1,6 @@
 package de.activegroup
 
 import de.activegroup.TtyM.Companion.output
-import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 
@@ -14,7 +13,7 @@ class TtyMTest {
             pure(5)
         }
         val output = mutableListOf<String>()
-        runBlocking { output(tty, output) }
+        output(tty, output)
         assertContentEquals(output.asSequence(), sequenceOf("foo", "bar"))
     }
 }

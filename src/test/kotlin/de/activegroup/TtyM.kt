@@ -23,7 +23,7 @@ sealed interface TtyM<out A> {
                 is Pure -> tty.result
             }
 
-        tailrec suspend fun <A> output(tty: TtyM<A>, output: MutableList<String>): A =
+        tailrec fun <A> output(tty: TtyM<A>, output: MutableList<String>): A =
             when (tty) {
                 is Write -> {
                     output.add(tty.text)
