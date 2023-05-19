@@ -170,7 +170,10 @@ Standard-Operation der Monade, um zwei Reader-Programme
 hintereinanderzuschalten.
 
 So ein Objekt vom Typ =Reader<R, A>= ist aber nur eine Beschreibung
-eines Programms, das auf den Kontext zugreift: Damit es läuft, muss es
+eines Programms, das auf den Kontext zugreift.  =Reader= ist eine sogenannte
+/freie Monade/ und repräsentiert eine fundamental objektorientierte
+Idee - alles, also auch Abläufe wird durch Objekte repräsentiert.
+Damit so ein =Reader=-Programm läuft, muss es
 explizit ausgeführt werden - und dabei geschieht auch die eigentliche
 Dependency Injection, die festlegt, welches Objekt aus =Ask=
 zurückgegeben wird.  Dies erledigt die folgende einfache Funktion
